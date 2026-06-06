@@ -13,7 +13,6 @@ A Streamlit chatbot UI connected to a locally-served LLM (Ollama) via streaming 
 | Frontend UI | Streamlit (multi-page: `app.py` + `pages/`) |
 | LLM Model | `qwen3:1.7b` (default in Helm `values.yaml`); `gemma4:e2b` (default local) |
 | LLM Serving | Ollama (runs on Windows host, NOT in the cluster) |
-| Agent Framework | LangGraph (`agents/graph.py`) + LangChain-Ollama |
 | Containerization | Docker |
 | Container Orchestration | Kubernetes (Docker Desktop local cluster) |
 | Kubernetes Package Management | Helm |
@@ -27,10 +26,10 @@ A Streamlit chatbot UI connected to a locally-served LLM (Ollama) via streaming 
 
 ### FastAPI Backend (`api/`)
 
-Streamlit pages communicate with a FastAPI service (`api/main.py`) rather than calling LangGraph or Ollama directly. This gives the app a proper HTTP API contract with JWT middleware enforcement and structured error handling.
+Streamlit pages communicate with a FastAPI service (`api/main.py`) rather than calling Ollama directly. This gives the app a proper HTTP API contract with JWT middleware enforcement and structured error handling.
 
 ```
-Streamlit pages  →  FastAPI (http://localhost:8000)  →  LangGraph / Ollama / PostgreSQL
+Streamlit pages  →  FastAPI (http://localhost:8000)  →  Ollama / PostgreSQL
 ```
 
 Endpoints:
@@ -39,58 +38,26 @@ Endpoints:
 | `POST` | `/auth/register` | No | Create a new user account |
 | `POST` | `/auth/login` | No (OAuth2 form) | Return `access_token` + `refresh_token` |
 | `POST` | `/chat/` | Bearer JWT | Stream chat tokens as SSE (`text/event-stream`) |
-| `POST` | `/analytics/` | Bearer JWT | Run LangGraph pipeline, return JSON result |
 | `GET` | `/health` | No | Liveness check |
 | `GET` | `/docs` | No | Swagger UI |
 
 Key design choices:
-- Route handlers use `def` (not `async def`) so LangGraph and psycopg2 (both sync) run in Uvicorn's thread pool without blocking the event loop.
+- Route handlers use `def` (not `async def`) so psycopg2 (sync) runs in Uvicorn's thread pool without blocking the event loop.
 - `api/deps.py` provides `get_current_user()` — a FastAPI `Depends` that decodes the Bearer token and raises `401` on failure.
-- `api/routers/analytics.py` calls `graph.invoke()` (full run) and JSON-serialises the result, normalising non-serialisable types (dates, etc.) via a `json.dumps(default=str)` round-trip.
 - `api/routers/chat.py` returns a `StreamingResponse` with `media_type="text/event-stream"`; each Ollama token is emitted as `data: <token>\n\n`. Streamlit consumes this with `httpx.Client().stream()`, stripping the `data: ` prefix before yielding to `st.write_stream`.
 
 ### Streamlit Multi-Page App
 
-Four pages auto-discovered by Streamlit (plus `pages/login.py` for auth):
+Three pages auto-discovered by Streamlit (plus `pages/login.py` for auth):
 - `app.py` — main chat page; streams responses token-by-token via `st.write_stream` by calling `POST /chat/` on the FastAPI service; calls `generate_suggestions` after each reply by making a second streaming call; stores history in `st.session_state.messages`
 - `pages/login.py` — login / registration page; calls `auth.users` and `auth.tokens` directly (not through FastAPI); sets `auth_access_token`, `auth_refresh_token`, `auth_user` in session state
 - `pages/upload.py` — Excel ingestion page; calls `ingestion.db` / `ingestion.parser` directly (not through FastAPI); validates → shows row count + date range preview → user clicks "Insert into DB" → inserts into PostgreSQL
-- `pages/analytics.py` — F&O analysis page; calls `POST /analytics/` on FastAPI; shows a spinner while waiting; renders the response with `_word_stream` (word-reveal at 25 ms/word) if results exist, `st.markdown` otherwise; SQL and raw results shown in expanders
 
-`utils/state.py` defines `init_session_state()` — called at the top of every page to ensure all `st.session_state` keys (`messages`, `suggestions`, `analysis_history`) survive Streamlit page navigation without resetting.
+`utils/state.py` defines `init_session_state()` — called at the top of every page to ensure all `st.session_state` keys (`messages`, `suggestions`) survive Streamlit page navigation without resetting.
 
 Ollama always runs on the **Windows host**, never inside Kubernetes:
 - Local dev: `http://localhost:11434` (default)
 - In-cluster: `http://host.docker.internal:11434` (set in `helm/chatbot/values.yaml`)
-
-### LangGraph Agent Pipeline (`agents/graph.py`)
-
-`pages/analytics.py` → `agents/graph.py` → PostgreSQL
-
-A LangGraph `StateGraph` with `AnalysisState` TypedDict drives a multi-step F&O data analysis pipeline:
-
-```
-supervisor ──────────► schema_agent ──► sql_planner ──► sql_validator
-                                                              │
-                                                   (valid)──► execute_sql
-                                                   (invalid)─► clarification_agent ─► (retry ≤3)
-                                                                                          │
-                                               analytics_agent ◄──(data found)────────────┘
-                                                      │
-                                               validation_node
-                                                      │
-                                            response_formatter ──► END
-```
-
-Key behaviors:
-- `supervisor` asks the LLM whether the question is answerable from Zerodha F&O tables; if the response does not contain "YES", `final_response` is set immediately and `_route_supervisor` routes to `END`, short-circuiting the rest of the pipeline
-- `schema_agent` fetches live column schema via `get_table_schemas`; falls back to static `_TABLE_DESCRIPTIONS` strings in `graph.py` if the DB is unreachable
-- `sql_planner` adds `LIMIT 500` for row-level queries; aggregations (GROUP BY) may omit it; SQL is extracted from fenced code blocks via regex
-- `sql_validator` runs `EXPLAIN` (read-only) against PostgreSQL to catch syntax errors; only SELECT queries are permitted
-- `clarification_agent` retries up to 3 times on invalid SQL or empty results
-- `analytics_agent` receives at most 50 rows of query results (truncated by `_rows_to_text` in `graph.py`) to keep LLM context bounded
-- `validation_node` rejects analyses shorter than 30 chars (`_MIN_CHARS`), lacking numbers, or matching refusal phrases (`_REFUSAL_RE`); sends back to `clarification_agent`
-- The LLM client (`ChatOllama`) is lazily initialized with `lru_cache` — env vars are read at first call, not at import
 
 ### Authentication (`auth/`)
 
@@ -132,30 +99,34 @@ When `PHOENIX_ENDPOINT` is set, the app instruments itself via `OllamaInstrument
   - `stream_response` (kind=`CHAIN`) — spans the streaming LLM call
   - `generate_suggestions` (kind=`CHAIN`) — spans the follow-up question generation
 
-`agents/graph.py` span tree (per analytics query):
-- `fo_analysis` (kind=`AGENT`) — set in `pages/analytics.py`
-  - One span per graph node: `supervisor`, `schema_agent`, `sql_planner`, `sql_validator`, `execute_sql`, `clarification_agent`, `analytics_agent`, `validation_node`, `response_formatter`
-
-Node span kinds follow OpenInference conventions: LLM calls → `LLM`, DB/tool calls → `TOOL`, routing/formatting → `CHAIN`.
-
 In-cluster, Phoenix receives traces at `http://phoenix:6006/v1/traces`. Phoenix is toggled via `values.yaml: phoenix.enabled`.
+
+### Semantic Response Caching (`api/cache.py`)
+
+Single-turn `/chat/` responses are cached in Redis using Ollama embeddings and cosine similarity.
+
+- `cache_get(prefix, parts)` — embeds the query with `EMBED_MODEL` (default: `nomic-embed-text`); scans all `sem:{prefix}:*` Redis keys; returns the stored response if cosine similarity ≥ `CACHE_SIM_THRESHOLD` (default: `0.90`)
+- `cache_set(prefix, parts, value, ttl)` — embeds and stores under `sem:{prefix}:{uuid}` with a TTL of 300 s
+- Only caches single-turn chat (no history); multi-turn requests bypass the cache entirely
+- Fails open on both embedding errors and Redis errors — the request is always served
+- `CACHE_HITS` and `CACHE_MISSES` Prometheus counters are labeled by endpoint
 
 ### Rate Limiting (`api/rate_limit.py`)
 
-Redis-backed rate limiters are applied per-user (keyed by `"{endpoint}:{user_sub}"` from the JWT `sub` claim) on three routes:
+Redis-backed rate limiters are applied per-user (keyed by `"{endpoint}:{user_sub}"` from the JWT `sub` claim) on two routes:
 
 | Instance | Route | Limit |
 |---|---|---|
 | `chat_limiter` | `POST /chat/` | 20 req / 60 s |
-| `analytics_limiter` | `POST /analytics/` | 5 req / 60 s |
 | `login_limiter` | `POST /auth/login` | 10 req / 60 s |
 
 Two implementations exist: `SlidingWindowRateLimiter` (wired to routes; ZSET-based) and `TokenBucket` (educational only, not wired). Both **fail-open** — a `redis.RedisError` logs a warning and lets the request through rather than blocking it. The TOCTOU non-atomicity is intentional (documented in the class docstring) and acceptable for this scope.
 
-The `/metrics` endpoint is auto-exposed by `prometheus_fastapi_instrumentator` in `api/main.py`. `api/metrics.py` adds three application-level Prometheus counters:
+The `/metrics` endpoint is auto-exposed by `prometheus_fastapi_instrumentator` in `api/main.py`. `api/metrics.py` adds four application-level Prometheus counters:
 - `chatbot_chat_requests_total` — incremented after rate-limit passes in `/chat/`
-- `chatbot_analytics_requests_total` — incremented after rate-limit passes in `/analytics/`
 - `chatbot_rate_limit_hits_total{endpoint}` — incremented on every HTTP 429
+- `chatbot_cache_hits_total{endpoint}` — incremented on semantic cache hit
+- `chatbot_cache_misses_total{endpoint}` — incremented on semantic cache miss
 
 ### CI Auto-Commit Behavior
 
@@ -178,6 +149,8 @@ After a successful Docker push, CI (`ci.yml`) automatically commits back to `mai
 | `API_BASE_URL` | `http://localhost:8000` | FastAPI server URL used by Streamlit pages |
 | `REDIS_HOST` | `localhost` | Redis server hostname (`redis` in-cluster) |
 | `REDIS_PORT` | `6379` | Redis server port |
+| `EMBED_MODEL` | `nomic-embed-text` | Ollama model used by semantic cache for query embeddings |
+| `CACHE_SIM_THRESHOLD` | `0.90` | Cosine similarity threshold for a semantic cache hit |
 
 ## Common Commands
 
@@ -203,13 +176,13 @@ ruff check app.py pages/ ingestion/   # lint (matches CI — agents/ and api/ ar
 pytest tests/ -v                       # all tests
 pytest tests/test_chat.py::test_yields_tokens -v      # single chat test
 pytest tests/test_ingestion.py -v                     # ingestion tests (requires real fixture file)
-pytest tests/test_graph.py -v                         # unit tests for _check_analysis validation logic
 ```
 
 > **Test isolation:**
-> - `test_chat.py`, `test_graph.py` — fully isolated; mock all I/O; no real services needed
+> - `test_chat.py` — fully isolated; mock all I/O; no real services needed
 > - `test_auth.py` — fully isolated; `os.environ.setdefault("JWT_SECRET_KEY", ...)` at module top means the env var is not required when running tests
 > - `test_rate_limit.py`, `test_metrics.py` — fully isolated; use `fakeredis` instead of real Redis; no external services needed
+> - `test_cache.py` — fully isolated; mocks Ollama embed + fakeredis
 > - `test_ingestion.py` — requires three real fixture files (paths hardcoded):
 >   - `raw_data_files/daily_poistions/positions.xlsx` — "poistions" is an intentional typo; don't rename
 >   - `raw_data_files/daily_pl/pnl.xlsx`
@@ -220,10 +193,12 @@ pytest tests/test_graph.py -v                         # unit tests for _check_an
 docker run -d --name redis -p 6379:6379 redis:7-alpine
 ```
 
-### Local PostgreSQL (for upload and analytics pages)
+### Local PostgreSQL (for upload page)
 ```powershell
 docker run -d --name pg -e POSTGRES_DB=chatbot -e POSTGRES_USER=chatbot -e POSTGRES_PASSWORD=chatbot123 -p 5432:5432 postgres:16-alpine
 ```
+
+> **In-cluster data loss:** The Helm chart mounts PostgreSQL data on `emptyDir` — every pod restart wipes all tables. After any pod restart you must click **"Create Tables in DB"** on the Upload page and re-upload your Excel files.
 
 ### Docker
 ```powershell
@@ -262,12 +237,16 @@ kubectl port-forward svc/phoenix 6006:6006
 # Check Phoenix pod
 kubectl get pods -l app=phoenix
 kubectl logs deployment/chatbot-phoenix
-
-# Disable Phoenix (edit values.yaml: phoenix.enabled: false, then upgrade)
-helm.exe upgrade chatbot helm/chatbot
 ```
 
-### Prometheus + Grafana (Module 13)
+All in-cluster services are toggled via `helm/chatbot/values.yaml` flags — set to `false` and run `helm.exe upgrade chatbot helm/chatbot` to disable any service:
+- `phoenix.enabled` — Arize Phoenix trace collector
+- `redis.enabled` — Redis (rate limiting + semantic cache)
+- `prometheus.enabled` — Prometheus metrics scraper
+- `grafana.enabled` — Grafana dashboard
+- `postgres.enabled` — PostgreSQL pod
+
+### Prometheus + Grafana
 ```powershell
 # Port-forward (each in a dedicated terminal)
 kubectl port-forward svc/prometheus 9090:9090   # UI at http://localhost:9090
@@ -313,9 +292,11 @@ argocd.exe app diff chatbot     # diff: Git vs cluster
 
 Track overall status in `PROGRESS.md`. All 17 modules complete (chat UI → CI → Helm/K8s → ArgoCD → testing → suggestions → Phoenix → ingestion → LangGraph agents → hardening → date-aware analytics → JWT auth → FastAPI backend → rate limiting + Prometheus metrics → semantic response caching → LLM eval framework → A/B model comparison).
 
+> **Note:** `ARCHITECTURE.md` documents the pre-Module 13 architecture where Streamlit called Ollama directly. Since Module 13 (FastAPI backend layer), all Streamlit pages go through FastAPI. Trust CLAUDE.md for the current architecture.
+
 ## Planning Conventions
 
-- Save all plans to `.agents/plans/` using naming `{sequence}.{plan-name}.md` (e.g., `3.helm-k8s.md`)
+- Save all plans to `.agents/bfsi/plans/` using naming `{sequence}.{plan-name}.md` (e.g., `3.helm-k8s.md`)
 - Each plan must include at least one validation test per task
 - Mark complexity at the top: ✅ Simple | ⚠️ Medium | 🔴 Complex
 - 🔴 Complex plans must be broken into sub-plans before executing

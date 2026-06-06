@@ -96,6 +96,4 @@ class TokenBucket:
 
 # Module-level instances — redis.Redis() connects lazily (no TCP until first command)
 chat_limiter = SlidingWindowRateLimiter(_redis_client, limit=20, window_seconds=60)
-analytics_limiter = SlidingWindowRateLimiter(_redis_client, limit=5, window_seconds=60)
 login_limiter = SlidingWindowRateLimiter(_redis_client, limit=10, window_seconds=60)
-data_chat_limiter = SlidingWindowRateLimiter(_redis_client, limit=10, window_seconds=60)

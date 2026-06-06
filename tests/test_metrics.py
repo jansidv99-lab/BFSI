@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 from prometheus_client import Counter
 
-from api.metrics import ANALYTICS_REQUESTS, CHAT_REQUESTS, RATE_LIMIT_HITS
+from api.metrics import CHAT_REQUESTS, RATE_LIMIT_HITS
 
 
 def _counter_value(counter, labels=None):
@@ -24,7 +24,6 @@ def _counter_value(counter, labels=None):
 
 def test_counters_are_counter_type():
     assert isinstance(CHAT_REQUESTS, Counter)
-    assert isinstance(ANALYTICS_REQUESTS, Counter)
     assert isinstance(RATE_LIMIT_HITS, Counter)
 
 

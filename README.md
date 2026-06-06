@@ -120,15 +120,24 @@ phoenix:
 
 postgres:
   enabled: true   # set false to disable the DB pod
+
+redis:
+  enabled: true   # rate limiting + semantic cache — disable only for minimal deploys
+
+prometheus:
+  enabled: true   # metrics scraper
+grafana:
+  enabled: true   # dashboard UI (admin / admin)
 ```
 
-**Verify all 3 pods are Running:**
+**Verify core pods are Running:**
 
 ```powershell
 kubectl get pods
 # chatbot-chatbot-<hash>    1/1   Running
 # chatbot-phoenix-<hash>    1/1   Running
 # chatbot-postgres-<hash>   1/1   Running
+# chatbot-redis-<hash>      1/1   Running
 ```
 
 ---
@@ -251,7 +260,10 @@ pytest tests/ -v
 | Test file | Covers |
 |---|---|
 | `tests/test_chat.py` | `stream_response()` and `generate_suggestions()` — Ollama mocked |
-| `tests/test_graph.py` | `_check_analysis()` validation heuristics — no external deps |
+| `tests/test_auth.py` | Password hashing, JWT creation/decoding — no external deps |
+| `tests/test_cache.py` | Semantic cache get/set, fail-open behaviour — fakeredis + mocked embed |
+| `tests/test_rate_limit.py` | SlidingWindowRateLimiter and TokenBucket — fakeredis |
+| `tests/test_metrics.py` | Prometheus counter definitions and increment behaviour |
 | `tests/test_ingestion.py` | Parser validation, Excel parsing, DB insert logic — requires real fixture files |
 
 ---
@@ -261,10 +273,18 @@ pytest tests/ -v
 ```
 app.py                        # main chat page (streaming, suggestions, tracing)
 pages/
+  login.py                    # login / registration page
   upload.py                   # data ingestion UI (bulk upload + per-table sections)
-  analytics.py                # F&O analysis UI — calls LangGraph, word-stream rendering
-agents/
-  graph.py                    # LangGraph pipeline: supervisor → SQL planner → executor → analyzer
+api/
+  main.py                     # FastAPI app — /auth and /chat routes
+  routers/
+    auth.py                   # register + login endpoints
+    chat.py                   # SSE streaming endpoint
+  cache.py                    # semantic response cache (Ollama embeddings + Redis)
+  rate_limit.py               # SlidingWindowRateLimiter + TokenBucket implementations
+  metrics.py                  # Prometheus counters
+  deps.py                     # JWT Bearer dependency for FastAPI routes
+auth/                         # JWT tokens, bcrypt passwords, session state, user table
 ingestion/
   parser.py                   # validate + parse positions, pnl, tradebook Excel files
   db.py                       # schema creation, insert functions, list_tables
@@ -273,22 +293,13 @@ utils/
 requirements.txt
 Dockerfile                    # python:3.11-slim
 helm/chatbot/
-  values.yaml                 # image tag, ollama, phoenix, postgres config
-  templates/
-    deployment.yaml           # chatbot pod + env vars
-    service.yaml              # LoadBalancer on 8501
-    postgres-deployment.yaml  # PostgreSQL pod (emptyDir volume)
-    postgres-service.yaml     # ClusterIP named 'postgres' on 5432
-    phoenix-deployment.yaml   # Arize Phoenix pod
-    phoenix-service.yaml      # ClusterIP on 6006 (UI) + 4317 (OTLP)
+  values.yaml                 # image tag, ollama, phoenix, postgres, redis config
+  templates/                  # chatbot + postgres + phoenix + redis + prometheus + grafana
 argocd/
   application.yaml            # ArgoCD Application CR
 .github/workflows/ci.yml      # GitHub Actions CI
-tests/
-  test_chat.py
-  test_ingestion.py
-  test_graph.py               # unit tests for _check_analysis validation logic
-raw_data_files/               # sample Zerodha Excel files (gitignored in production)
+tests/                        # pytest suite — all fully isolated except test_ingestion.py
+raw_data_files/               # Zerodha Excel fixtures for test_ingestion.py
   daily_poistions/positions.xlsx
   daily_pl/pnl.xlsx
   trade_book/tradebook.xlsx

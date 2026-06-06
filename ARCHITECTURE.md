@@ -2,7 +2,7 @@
 
 ## Context and Goals
 
-This project is a personal Zerodha F&O trading analytics platform built in iterative learning phases. Each phase adds a production-grade concern: containerization, CI/CD, GitOps, observability, data ingestion, and finally an agentic analysis layer.
+This project is a Customer Analytics Copilot – Policy & Document RAG analytics platform built in iterative learning phases. Each phase adds a production-grade concern: containerization, CI/CD, GitOps, observability, data ingestion, and finally an agentic analysis layer.
 
 The primary goals are:
 1. A usable chatbot (general LLM chat + F&O-specific analytics over uploaded trade data)

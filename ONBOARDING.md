@@ -14,7 +14,7 @@ Three things run together to make the app work:
 | Ollama (LLM server) | Your Windows machine — always | `ollama serve` + pull a model |
 | PostgreSQL | Docker container (dev) or Kubernetes (prod) | `docker run postgres` or included in Helm chart |
 
-The app has three pages: a general-purpose **Chat**, an **Upload** page for Zerodha Excel exports, and an **Analytics** page that queries those uploads using natural language.
+The app has two pages: a general-purpose **Chat** and an **Upload** page for Zerodha F&O Excel exports.
 
 ---
 
@@ -66,11 +66,11 @@ streamlit run app.py
 
 Open http://localhost:8501. Type a message in the chat box. If you see "Ollama is not running", make sure `ollama serve` is running in another terminal.
 
-**That's it for the Chat page.** The Upload and Analytics pages additionally need PostgreSQL (next step).
+**That's it for the Chat page.** The Upload page additionally needs PostgreSQL (next step).
 
 ---
 
-## Setting Up PostgreSQL (for Upload and Analytics Pages)
+## Setting Up PostgreSQL (for Upload Page)
 
 ```powershell
 docker run -d --name pg \
@@ -86,8 +86,6 @@ Then in the app:
 2. Click **"Create Tables in DB"** — this creates the four tables (`daily_positions`, `daily_pl`, `daily_trades`, `daily_charges`)
 3. Upload your Zerodha F&O Excel files
 
-The Analytics page will now be able to query that data.
-
 ---
 
 ## Configuration
@@ -98,7 +96,7 @@ Create a `.env` file in the project root to override defaults:
 OLLAMA_HOST=http://localhost:11434   # default; change if Ollama is on another machine
 MODEL_NAME=gemma4:e2b               # model used for chat, suggestions, and agent nodes
 
-# PostgreSQL (only needed for Upload and Analytics pages)
+# PostgreSQL (only needed for the Upload page)
 PG_HOST=localhost
 PG_PORT=5432
 PG_DB=chatbot
@@ -117,19 +115,19 @@ The app loads `.env` automatically via `python-dotenv`.
 ## Project Layout
 
 ```
-app.py              Chat page — Ollama streaming, follow-up suggestions
+app.py              Chat page — Ollama streaming, follow-up suggestions, JWT auth
 pages/
+  login.py          Login / registration page
   upload.py         Excel upload → PostgreSQL ingestion
-  analytics.py      Natural-language F&O analytics (calls LangGraph)
-agents/
-  graph.py          LangGraph pipeline: supervisor → SQL planner → executor → analyzer
+api/                FastAPI backend (/auth, /chat routes)
+auth/               JWT tokens, bcrypt passwords, session management
 ingestion/
   parser.py         Excel parsers for Zerodha positions, P&L, and tradebook formats
   db.py             psycopg2 connection, table creation, insert functions
 helm/chatbot/       Kubernetes deployment (Helm chart)
 argocd/             ArgoCD GitOps manifest
 .github/workflows/  CI: lint + test + Docker build + push + auto-tag
-tests/              pytest suite for chat utilities and ingestion parsers
+tests/              pytest suite — all isolated except test_ingestion.py
 ```
 
 ---
@@ -232,7 +230,7 @@ kubectl port-forward svc/phoenix 6006:6006
 # Open http://localhost:6006
 ```
 
-Every LLM call (chat messages, analytics pipeline nodes) appears as a trace. This is useful for debugging why the analytics agent generated wrong SQL or why validation failed.
+Every chat turn appears as a trace with nested spans for the streaming call and suggestion generation. Useful for debugging latency or unexpected model output.
 
 For local dev, Phoenix is disabled by default (no `PHOENIX_ENDPOINT` set in `.env`).
 
@@ -245,7 +243,6 @@ For local dev, Phoenix is disabled by default (no `PHOENIX_ENDPOINT` set in `.en
 | "Ollama is not running" in chat | Run `ollama serve` in a separate terminal |
 | "Model not found" in chat | Run `ollama pull gemma4:e2b` (or whichever model is set) |
 | Upload page — "Create Tables in DB" fails | Start the postgres container first (`docker run ...` above) |
-| Analytics page returns no results | Tables exist but are empty — upload Excel files first |
 | `helm.exe` not found | Download the Windows binary from helm.sh, name it `helm.exe`, add to PATH |
 | `ruff check` fails in CI but not locally | Activate the venv (`ruff` must come from `.venv`, not a global install) |
 | Ingestion tests fail with FileNotFoundError | Place real Zerodha Excel exports in the `raw_data_files/` paths listed above |
@@ -256,8 +253,8 @@ For local dev, Phoenix is disabled by default (no `PHOENIX_ENDPOINT` set in `.en
 
 | File | What to read it for |
 |---|---|
-| `agents/graph.py` | How the F&O analytics agent pipeline works |
+| `api/main.py` + `api/routers/` | FastAPI app structure and route handlers |
 | `ingestion/parser.py` | How Excel files are parsed (hardcoded cell positions) |
-| `ARCHITECTURE.md` | Component map, data flows, and key design decisions |
+| `auth/` | JWT token lifecycle and bcrypt password handling |
 | `RUNBOOK.md` | How to deploy, upgrade, rollback, and troubleshoot |
 | `CLAUDE.md` | Instructions for Claude Code when working in this repo |
