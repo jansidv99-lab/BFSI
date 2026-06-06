@@ -49,8 +49,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/chatbot-simple:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/chatbot-simple:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/bfsi-simple:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/bfsi-simple:${{ github.sha }}
 
       - name: Update image tag in values.yaml
         run: |
