@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.git/
+.agents/
+.github/
+CLAUDE.md
+PROGRESS.md
+project.md

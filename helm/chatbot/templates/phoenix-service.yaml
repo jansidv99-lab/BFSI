@@ -1,0 +1,17 @@
+{{- if .Values.phoenix.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: phoenix
+spec:
+  type: ClusterIP
+  selector:
+    app: phoenix
+  ports:
+    - name: ui
+      port: 6006
+      targetPort: 6006
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+{{- end }}

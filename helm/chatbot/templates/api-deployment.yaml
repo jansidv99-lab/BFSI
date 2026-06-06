@@ -1,0 +1,78 @@
+{{- if .Values.api.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-api
+  labels:
+    app: chatbot-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chatbot-api
+  template:
+    metadata:
+      labels:
+        app: chatbot-api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: OLLAMA_HOST
+              value: {{ .Values.ollama.host | quote }}
+            - name: MODEL_NAME
+              value: {{ .Values.ollama.model | quote }}
+            {{- if .Values.phoenix.enabled }}
+            - name: PHOENIX_ENDPOINT
+              value: "http://phoenix:6006/v1/traces"
+            - name: PHOENIX_PROJECT
+              value: {{ .Values.phoenix.project | quote }}
+            {{- end }}
+            {{- if .Values.postgres.enabled }}
+            - name: PG_HOST
+              value: "postgres"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: PG_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: PG_PASSWORD
+              value: {{ .Values.postgres.password | quote }}
+            {{- end }}
+            - name: JWT_SECRET_KEY
+              value: {{ .Values.auth.jwtSecretKey | quote }}
+            - name: EMBED_MODEL
+              value: {{ .Values.cache.embedModel | default "nomic-embed-text" | quote }}
+            - name: CACHE_SIM_THRESHOLD
+              value: {{ .Values.cache.simThreshold | default "0.90" | quote }}
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+{{- end }}

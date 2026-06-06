@@ -1,0 +1,58 @@
+image:
+  repository: vamsidv2010/chatbot-simple
+  tag: 545eabe511ff3e9e74f05378f5c92b363a55cece
+  pullPolicy: IfNotPresent
+
+service:
+  type: LoadBalancer
+  port: 8501
+
+ollama:
+  host: http://host.docker.internal:11434
+  model: qwen3:1.7b
+
+phoenix:
+  enabled: true
+  image: arizephoenix/phoenix:latest
+  project: chatbot
+
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  database: chatbot
+  user: chatbot
+  # dev-only plaintext password; refactor to a Kubernetes Secret in a future module
+  password: chatbot123
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+
+api:
+  enabled: true
+
+prometheus:
+  enabled: true
+  image: prom/prometheus:latest
+
+grafana:
+  enabled: true
+  image: grafana/grafana:latest
+  adminPassword: "admin"
+
+cache:
+  embedModel: nomic-embed-text:latest
+  simThreshold: "0.90"  
+
+auth:
+  jwtSecretKey: "change-me-override-in-production"
+
+replicaCount: 1
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"

@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-chatbot
+  labels:
+    app: chatbot
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: chatbot
+  template:
+    metadata:
+      labels:
+        app: chatbot
+    spec:
+      containers:
+        - name: chatbot
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8501
+          env:
+            - name: OLLAMA_HOST
+              value: {{ .Values.ollama.host | quote }}
+            - name: MODEL_NAME
+              value: {{ .Values.ollama.model | quote }}
+            {{- if .Values.phoenix.enabled }}
+            - name: PHOENIX_ENDPOINT
+              value: "http://phoenix:6006/v1/traces"
+            - name: PHOENIX_PROJECT
+              value: {{ .Values.phoenix.project | quote }}
+            {{- end }}
+            {{- if .Values.postgres.enabled }}
+            - name: PG_HOST
+              value: "postgres"
+            - name: PG_PORT
+              value: "5432"
+            - name: PG_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: PG_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: PG_PASSWORD
+              value: {{ .Values.postgres.password | quote }}
+            {{- end }}
+            - name: JWT_SECRET_KEY
+              value: {{ .Values.auth.jwtSecretKey | quote }}
+            {{- if .Values.api.enabled }}
+            - name: API_BASE_URL
+              value: "http://chatbot-api:8000"
+            {{- end }}
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_HOST
+              value: "redis"
+            - name: REDIS_PORT
+              value: "6379"
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

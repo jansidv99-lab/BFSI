@@ -1,0 +1,13 @@
+{{- if .Values.api.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: chatbot-api
+spec:
+  type: ClusterIP
+  selector:
+    app: chatbot-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+{{- end }}

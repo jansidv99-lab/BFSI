@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: chatbot
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/jansidv99-lab/chatbot_simple.git
+    targetRevision: main
+    path: helm/chatbot
+    helm:
+      releaseName: chatbot
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true      # remove resources deleted from Git
+      selfHeal: true   # revert manual kubectl drift
+    syncOptions:
+      - CreateNamespace=false

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint
+        run: ruff check app.py pages/ ingestion/
+
+      - name: Helm lint
+        run: helm lint helm/chatbot
+
+      - name: Test
+        run: pytest tests/ -v
+
+  build-and-push:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/chatbot-simple:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/chatbot-simple:${{ github.sha }}
+
+      - name: Update image tag in values.yaml
+        run: |
+          sed -i "s|^  tag:.*|  tag: ${{ github.sha }}|" helm/chatbot/values.yaml
+
+      - name: Commit and push updated values.yaml
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/chatbot/values.yaml
+          git commit -m "ci: update image tag to ${{ github.sha }} [skip ci]"
+          git push

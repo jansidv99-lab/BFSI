@@ -1,0 +1,33 @@
+{{- if .Values.phoenix.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-phoenix
+  labels:
+    app: phoenix
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: phoenix
+  template:
+    metadata:
+      labels:
+        app: phoenix
+    spec:
+      containers:
+        - name: phoenix
+          image: {{ .Values.phoenix.image | quote }}
+          env:
+            - name: PHOENIX_PORT
+              value: "6006"
+          ports:
+            - containerPort: 6006
+            - containerPort: 4317
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 6006
+            initialDelaySeconds: 10
+            periodSeconds: 5
+{{- end }}

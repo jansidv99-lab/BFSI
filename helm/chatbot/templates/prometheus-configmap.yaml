@@ -1,0 +1,24 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      # Prometheus self-monitoring (always works)
+      - job_name: prometheus
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # FastAPI application metrics
+      # NOTE: works once api/ is added to the Dockerfile and deployed as a service
+      - job_name: fastapi
+        static_configs:
+          - targets: ['chatbot-api:8000']
+        metrics_path: /metrics
+{{- end }}
